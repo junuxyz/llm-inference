@@ -224,7 +224,7 @@ wheels = [
 ]
 
 [[package]]
-name = "llm-inference"
+name = "mlsys-notes"
 version = "0.0.0"
 source = { virtual = "." }
 dependencies = [

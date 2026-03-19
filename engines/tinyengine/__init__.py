@@ -8,7 +8,6 @@ from .tinyengine import (
     TinyEngine,
     TokenEvent,
     TokenizerCodec,
-    BaselineEngine,
 )
 
 __all__ = [
@@ -21,5 +20,4 @@ __all__ = [
     "TinyEngine",
     "TokenEvent",
     "TokenizerCodec",
-    "BaselineEngine",
 ]

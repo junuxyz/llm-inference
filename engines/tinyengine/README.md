@@ -12,7 +12,7 @@
 - prefill followed by iterative decode
 - per-request state and timing metrics (coming soon)
 - a benchmark harness for ShareGPT workloads (coming soon)
-- small, readable code
+- small, readable monorepo
 
 ## Overall structure
 
