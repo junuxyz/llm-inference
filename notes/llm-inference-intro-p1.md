@@ -7,7 +7,7 @@ _This is **Part 1** of LLM Inference and Inference Optimization From First Princ
 LLM inference simply means generating output tokens from input tokens (the _prompt_) using a trained model.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-1.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-1.png" width="540" />
   <br />
   <sub>Figure 1. LLM inference generates output tokens autoregressively from an input prompt.<sup><a href="#reference-1">[1]</a></sup></sub>
 </p>
@@ -20,7 +20,7 @@ Inference works differently. It is not a one-time expense but an operating cost 
 
 That is what makes inference economics so important. A model can be expensive to train and still make sense if it is trained once and then reused many times. But a model that is expensive to serve becomes more costly with every additional user, with every longer context window, and with every generated token. At product scale, that recurring serving bill can become comparable to the original training cost or even exceed it.<sup><a href="#reference-2">[2]</a></sup>
 
-This is why inference optimization matters so much. Once a model is in production, the central question is no longer just whether the model is good. It is whether the model can be served fast enough and cheaply enough for real usage to make economic sense.
+That is why people spend so much time optimizing inference. Once a model is in production, the central question is no longer just whether the model is good. It is whether the model can be served fast enough and cheaply enough for real usage to make economic sense.
 
 > **The future is overwhelmingly inference.**<sup><a href="#reference-3">[3]</a></sup>
 
@@ -30,7 +30,7 @@ An inference engine is usually trying to do two things at once:
 1. lower the cost per generated token
 2. reduce the latency of generation
 
-On the cost side, the key question is how much it costs to generate each token. While serving has several cost components, GPU time (or more broadly accelerator time) is usually the dominant one. This article uses the NVIDIA H100 as the reference point because it is still the most common mental model for large-model serving.
+On the cost side, the key question is how much it costs to generate each token. While serving has several cost components, GPU time (or more broadly accelerator time) is usually the dominant one. This article uses the NVIDIA H100 as a reference because it is the GPU most readers will already have in mind for large-model serving.
 
 This is effectively a GPU-cost-per-hour problem. Whether you buy GPUs or rent them from a cloud provider, the hourly bill is mostly fixed. What changes is how much useful generation you get from that fixed spend. An underutilized GPU costs as much as a busy one, which is why utilization matters so much.
 
@@ -47,7 +47,7 @@ Generation largely proceeds in two stages.
 First, the model processes the entire prompt to produce the first output token. This stage is called prefill. After prefill, the model generates tokens one at a time, appending each new token to the sequence and feeding it back into the model. This iterative stage is called decode. So for any request, there is one prefill and multiple decode steps.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-2.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-2.png" width="540" />
   <br />
   <sub>Figure 2. One prefill pass processes the full prompt, followed by repeated decode steps that generate one token at a time.<sup><a href="#reference-5">[5]</a></sup></sub>
 </p>
@@ -77,7 +77,7 @@ At a high level, any computer program does some mix of two things:
 From a performance standpoint, runtime often comes down to which of those two costs dominates.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-3.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-3.png" width="540" />
   <br />
   <sub>Figure 3. The roofline model separates memory-bound and compute-bound regimes as arithmetic intensity increases.<sup><a href="#reference-7">[7]</a></sup></sub>
 </p>
@@ -85,7 +85,7 @@ From a performance standpoint, runtime often comes down to which of those two co
 The roofline model<sup><a href="#reference-8">[8]</a></sup> turns that intuition into a hardware limit using two quantities: peak compute throughput and peak memory bandwidth. Its x-axis is arithmetic intensity. Its y-axis is performance, usually measured in FLOP/s.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-4.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-4.png" width="540" />
   <br />
   <sub>Figure 4. A literal roof image to build intuition for why the roofline model has a sloped section and a flat ceiling.<sup><a href="#reference-9">[9]</a></sup></sub>
 </p>
@@ -94,7 +94,7 @@ Before the turning point where the line flattens, performance is limited by memo
 
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-5.png" width="640" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-5.png" width="480" />
   <br />
   <sub>Figure 5. NVIDIA H100 SXM model-card numbers highlighting the gap between dense BF16 compute throughput and HBM bandwidth; the * refers to sparsity-assisted peak throughput.</sub>
 </p>
@@ -102,25 +102,21 @@ Before the turning point where the line flattens, performance is limited by memo
 NVIDIA lists the H100 SXM at about $\sim 1{,}000\,\text{TFLOP/s}$ of BF16 Tensor Core throughput (without sparsity) and $3.35\,\text{TB/s}$ of memory bandwidth. In other words, the chip can do arithmetic far faster than it can pull bytes from memory. That gap has widened over time. This is the basic idea behind the _memory wall_: you need higher arithmetic intensity to reach the compute roof.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-6.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-6.png" width="540" />
   <br />
   <sub>Figure 6. The memory wall: compute throughput has scaled faster than memory bandwidth, making data movement the bottleneck more often.<sup><a href="#reference-10">[10]</a></sup></sub>
 </p>
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-7.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-7.png" width="540" />
   <br />
   <sub>Figure 7. A factory-and-supply-chain metaphor for compute vs. memory: fast machines are useless if the bridge delivering data is too narrow.<sup><a href="#reference-11">[11]</a></sup></sub>
 </p>
 
 One way to picture this is to think of compute as a factory and memory bandwidth as the bridge delivering raw materials. The machines can run much faster than the bridge can deliver new material, and that mismatch is what the roofline model captures.
 
-<table>
-  <tr>
-    <td><strong>Note</strong></td>
-    <td>Here, "compute" means how many operations the compute unit can perform. In the context of AI workloads on GPUs, we usually measure it in FLOP/s (floating-point operations per second) or in FLOPs (total floating-point operations). "Memory," or more precisely memory bandwidth, is the speed at which data can be moved around. In LLM inference, that often means moving data from HBM into faster on-chip memory such as shared memory or registers.</td>
-  </tr>
-</table>
+> **Note**
+> Here, "compute" means how many operations the compute unit can perform. In the context of AI workloads on GPUs, we usually measure it in FLOP/s (floating-point operations per second) or in FLOPs (total floating-point operations). "Memory," or more precisely memory bandwidth, is the speed at which data can be moved around. In LLM inference, that often means moving data from HBM into faster on-chip memory such as shared memory or registers.
 
 ### arithmetic intensity
 
@@ -144,23 +140,19 @@ $$\text{Arithmetic Intensity} = \frac{\text{FLOPs}}{\text{Bytes Moved}}$$
 
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-8.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-8.png" width="540" />
   <br />
   <sub>Figure 8. Idealized H100 roofline showing the ridge point where performance transitions from bandwidth-limited to compute-limited.</sub>
 </p>
 
-<table>
-  <tr>
-    <td><strong>Note</strong></td>
-    <td>Crossing the ridge point does not mean the workload will automatically run near peak compute throughput. It means memory bandwidth is less likely to be the main bottleneck, so compute-side limits become more important.</td>
-  </tr>
-</table>
+> **Note**
+> Crossing the ridge point does not mean the workload will automatically run near peak compute throughput. It means memory bandwidth is less likely to be the main bottleneck, so compute-side limits become more important.
 
 When arithmetic intensity is low, performance sits on the bandwidth-limited slope. Only after each byte is reused enough times does the bottleneck shift to the compute units, at which point performance flattens at the compute ceiling.
 
 > Since compute on modern hardware, including GPUs, is much faster than memory movement, **you will not reach peak performance unless your workload has high arithmetic intensity.**
 
-In other words, a useful systems goal is to increase arithmetic intensity so the hardware spends more time doing math and less time waiting on bytes. That makes arithmetic intensity a useful lens for LLM inference.
+In other words, a useful systems goal is to increase arithmetic intensity so the hardware spends more time doing math and less time waiting on bytes. So arithmetic intensity gives us a practical way to think about LLM inference.
 
 ## revisiting prefill vs decode through roofline analysis
 
@@ -202,7 +194,7 @@ So while the compute per decode step is small, the bytes moved per step stay lar
 
 That is why prefill and decode land in different parts of the roofline model.
 
-Now let’s go through a concrete example with Qwen3-32B on a single H100 SXM.
+Now let’s go through a concrete example with Qwen3-32B on a single H100 SXM.<sup><a href="#reference-15">[15]</a></sup>
 
 ## example: Qwen3-32B on H100 SXM
 
@@ -211,7 +203,7 @@ To make the discussion concrete, consider serving a single request with Qwen3-32
 For prefill, the important qualitative result is that the workload lands on the compute-favored side of the roofline. Using the same Qwen3-32B assumptions as above, a $1000$-token prompt comes out to about $63.46\,\text{TFLOPs}$ of core transformer work and an arithmetic intensity of about $1012.6\ \text{FLOPs/byte}$, which is comfortably above the H100 ridge point of roughly $298.5\ \text{FLOPs/byte}$. The exact number will shift with accounting choices, but the conclusion is robust: prefill has enough batched matrix work to look compute-favored rather than bandwidth-limited.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-9.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-9.png" width="540" />
   <br />
   <sub>Figure 9. Prefill-phase arithmetic intensity on H100, showing that the example workload lies on the compute-favored side of the roofline.</sub>
 </p>
@@ -219,7 +211,7 @@ For prefill, the important qualitative result is that the workload lands on the 
 For decode, the picture flips. One decode step still streams essentially the same layer weights, but now it does only one token's worth of dense projection and MLP work while also rereading the growing KV cache. At context length $L = 1000$, the same first-order model gives an arithmetic intensity of about $1.03\ \text{FLOPs/byte}$, and even as $L$ grows very large the asymptote is only about $8\ \text{FLOPs/byte}$. So decode remains firmly memory-bound, and that qualitative conclusion is also robust to accounting detail.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-10.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-10.png" width="540" />
   <br />
   <sub>Figure 10. Decode-phase arithmetic intensity on H100, illustrating why single-token decode remains far below the ridge point and stays memory-bound.</sub>
 </p>
@@ -228,11 +220,11 @@ Appendix A provides the full derivation, including smaller per-layer operations 
 
 ## performance metrics
 
-So far, the discussion has focused on the internal structure of inference and the hardware limits that shape it. In practice, those effects show up through a smaller set of serving metrics.
+So far, the discussion has focused on the internal structure of inference and the hardware limits that shape it. In real systems, those effects show up through a smaller set of serving metrics.
 
 ### latency and throughput
 
-**Latency** is the time between when a user's request is sent and when the generation finishes and is returned to the user. The most useful latency split is the one that mirrors the two inference phases: TTFT for prefill and TPOT for decode.
+**Latency** is the time between when a user's request is sent and when the generation finishes. A useful split mirrors the two inference phases. TTFT maps to prefill. TPOT maps to decode.
 
 **TTFT** (Time-To-First-Token)
 
@@ -240,7 +232,7 @@ TTFT measures the time between receiving a user's request and generating the fir
 
 **TPOT** (Time-Per-Output-Token)
 
-TPOT measures the average latency between output tokens after the first one, and is often discussed as average ITL, or inter-token latency, during the decoding phase. It roughly tracks decode speed, though sampling and scheduler overhead also contribute. Lower TPOT means the request streams faster and also finishes sooner.
+TPOT measures the average latency between output tokens after the first one. It is often discussed as average ITL, or inter-token latency, during decode. It roughly tracks decode speed, though sampling and scheduler overhead also contribute. Lower TPOT means the request streams faster and finishes sooner.
 
 > **Latency ≈ TTFT + (TPOT × (output tokens - 1))**
 
@@ -256,7 +248,7 @@ RPS measures how many requests the model can successfully process per second.
 
 **TPS** (Tokens-Per-Second)
 
-TPS measures how many tokens the model can successfully process per second. RPS depends heavily on the shape of the workload, for example whether requests are short or long. TPS is often a more convenient unit, but it is still workload-dependent. Also, when people report TPS, it is worth checking whether they mean input tokens, output tokens, or both.
+TPS measures how many tokens the model can successfully process per second. RPS depends heavily on workload shape, such as whether requests are short or long. TPS is often a more convenient unit, but it is still workload-dependent. When people report TPS, it is worth checking whether they mean input tokens, output tokens, or both.
 
 **Goodput**
 
@@ -266,40 +258,32 @@ For example, suppose a system serves $100$ requests per second, but only $70$ of
 
 Goodput differs from throughput because it includes latency-related constraints rather than just raw volume.
 
-<table>
-  <tr>
-    <td><strong>Note</strong></td>
-    <td>This article does not cover every metric in detail, for example TTLT, because the goal is to build a clear mental model for LLM engines and InferenceOps. The metrics above are enough for that purpose. For a broader survey of inference metrics, see this overview<sup><a href="#reference-16">[16]</a></sup>.</td>
-  </tr>
-</table>
+> **Note**
+> This article does not cover every metric in detail, for example TTLT, because the goal is to build a clear mental model for LLM engines and InferenceOps. The metrics above are enough for that purpose. For a broader survey of inference metrics, see this overview<sup><a href="#reference-17">[17]</a></sup>.
 
-This gives us the basic mapping. Prefill largely determines TTFT. Decode largely determines TPOT. Throughput depends on how efficiently the hardware is used across both phases. The next section turns from performance as a bandwidth problem to a different serving constraint: memory capacity.
+This gives us the basic mapping. Prefill largely determines TTFT. Decode largely determines TPOT. Throughput depends on how efficiently the hardware is used across both phases. The next section shifts from bandwidth-limited performance to memory capacity.
 
 ## how much memory is needed to decode?
 
-So far, the discussion has treated memory mainly as a bandwidth problem: how many bytes must move through HBM during a forward pass. This section switches to a different question. It is about memory capacity, or how many bytes must fit in VRAM at all.
+So far, the discussion has treated memory mainly as a bandwidth problem. The question was how many bytes must move through HBM during a forward pass. This section asks a different question. How many bytes must fit in VRAM at all?
 
 This distinction matters.
 
-<table>
-  <tr>
-    <td><strong>Note</strong></td>
-    <td>In the roofline discussion above, weights were mostly a <strong>traffic</strong> question. Here they are a <strong>capacity</strong> question: how many bytes must live in VRAM at all?</td>
-  </tr>
-</table>
+> **Note**
+> In the roofline discussion above, weights were mostly a **traffic** question. Here they are a **capacity** question. The question is how many bytes must live in VRAM at all.
 
 A simple way to see that distinction is to visualize one decode request on an H100 SXM with $80\,\text{GB}$ of VRAM.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-11.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-11.png" width="540" />
   <br />
   <sub>Figure 11. An empty H100 GPU memory budget with 80 GB of VRAM before allocating model weights, KV cache, or activations.</sub>
 </p>
 
-During inference, model weights must stay resident in VRAM, while activations and KV cache add extra pressure on top of that base footprint.
+During inference, model weights must stay resident in VRAM. Activations and KV cache add pressure on top of that base footprint.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-12.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-12.png" width="540" />
   <br />
   <sub>Figure 12. After loading the model, GPU memory is already mostly occupied by resident weights, with only a small activation footprint shown separately.</sub>
 </p>
@@ -307,23 +291,23 @@ During inference, model weights must stay resident in VRAM, while activations an
 While we can use various dtypes for model weights, `bf16` is still a common baseline. At a rough back-of-the-envelope level, a $32\text{B}$-parameter model in `bf16` needs about $32\text{B} \times 2\ \text{bytes} = 64\,\text{GB}$ of raw weight storage. In this section, treat memory sizes as rough decimal GB estimates rather than binary GiB accounting.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-13.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-13.png" width="540" />
   <br />
   <sub>Figure 13. For Qwen3-32B in bf16, model weights alone take roughly 64 GB, illustrating why weight residency dominates VRAM capacity.</sub>
 </p>
 
-Activation memory is harder to estimate from first principles because it depends on batch size, sequence length, kernels, and runtime behavior. In practice, rough heuristics such as $10\text{--}30\%$ of model weight are sometimes used for planning, though simple decode usually has a much smaller live activation footprint.
+Activation memory is harder to estimate from first principles because it depends on batch size, sequence length, kernels, and runtime behavior. In practice, rough heuristics such as $10\text{--}30\%$ of model weight are sometimes used for planning. Simple decode usually has a much smaller live activation footprint.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-14.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-14.png" width="540" />
   <br />
   <sub>Figure 14. Activation memory is typically much smaller than model weights in decode, though it grows with larger prefills and larger batches.</sub>
 </p>
 
-After the model is loaded, most of the $80\,\text{GB}$ budget is already occupied. The remaining headroom is used for KV cache, activation/workspace buffers, and runtime overhead, and the usable amount is smaller than the naive $80\,\text{GB} - 64\,\text{GB}$ because CUDA and the serving stack also consume memory.
+After the model is loaded, most of the $80\,\text{GB}$ budget is already occupied. The remaining headroom goes to KV cache, activation and workspace buffers, and runtime overhead. In practice, usable headroom is smaller than the naive $80\,\text{GB} - 64\,\text{GB}$ because CUDA and the serving stack also consume memory.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-15.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-15.png" width="540" />
   <br />
   <sub>Figure 15. Remaining VRAM headroom after loading about 64 GB of model weights: roughly 16 GB for KV cache, activations, workspace buffers, and runtime overhead.</sub>
 </p>
@@ -333,7 +317,7 @@ After the model is loaded, most of the $80\,\text{GB}$ budget is already occupie
 Consider one request in its decode phase with a KV cache of $2{,}048$ tokens. At that point, GPU memory already contains the KV cache of the prefilled prompt plus the tokens decoded so far.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-16.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-16.png" width="540" />
   <br />
   <sub>Figure 16. Memory layout for a single decode request, with one request's KV cache added beside the model weights and example KV sizes shown for different context lengths.</sub>
 </p>
@@ -359,28 +343,28 @@ At around a $2\text{K}$ context, the memory story is still dominated by model we
 A single decode request generates only one token per step and does not fully use the remaining memory headroom. That is what batching exploits.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-17.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-17.png" width="540" />
   <br />
   <sub>Figure 17. With only one active request, each decode step still produces just one new token, leaving substantial VRAM headroom underutilized.</sub>
 </p>
 
-If multiple requests are active, the remaining VRAM can hold additional KV cache and activation/workspace state, allowing more requests to run together on the same GPU. Figure 18 shows four requests for illustration, but in practice the batch is limited by available VRAM and latency targets.
+If multiple requests are active, the remaining VRAM can hold additional KV cache and activation or workspace state. That lets more requests run together on the same GPU. Figure 18 shows four requests for illustration, but the real batch is limited by available VRAM and latency targets.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-18.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-18.png" width="540" />
   <br />
   <sub>Figure 18. Example batched serving layout with four requests, each carrying roughly a 2K-token KV cache, while activation memory still remains relatively small and ephemeral.</sub>
 </p>
 
-Activation memory grows with the amount of work in the current forward pass, so it increases with sequence length and batch size. In some cases its share rises, but in many practical cases model weights and KV cache still dominate long-lived memory use. Unlike KV cache, activation memory is not accumulated across decode steps; it is only alive for that forward pass.
+Activation memory grows with the amount of work in the current forward pass, so it increases with sequence length and batch size. In some cases its share rises. In many practical settings, though, model weights and KV cache still dominate long-lived memory use. Unlike KV cache, activation memory is not accumulated across decode steps. It exists only for that forward pass.
 
 <p align="center">
-  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-19.png" width="720" />
+  <img src="../assets/notes/llm-inference-intro-p1/llm-inference-intro-p1-19.png" width="540" />
   <br />
   <sub>Figure 19. Batched decode turns one forward pass into four output tokens, improving weight reuse and throughput across simultaneously served requests.</sub>
 </p>
 
-This makes token generation cheaper because one batched decode step can generate one token for each active request, amortizing heavy model-weight traffic across more useful work. Intuitively, the workload becomes less matrix-vector-like and more matrix-matrix-like.
+This makes token generation cheaper because one batched decode step can generate one token for each active request. That amortizes heavy model-weight traffic across more useful work. Intuitively, the workload becomes less matrix-vector-like and more matrix-matrix-like.
 
 We will look at more advanced inference optimization techniques in Part 2.
 
@@ -395,13 +379,13 @@ The most important takeaways are:
 - In serving, model weights dominate both bandwidth traffic and VRAM capacity, which is why weight reuse matters so much.
 - Batching improves throughput because one forward pass can serve multiple requests and amortize weight movement across more useful work.
 
-Taken together, the core serving problem is simple. Prefill is mainly a compute problem. Decode is mainly a memory problem. Good inference systems are built around that split. Part 2 builds on that foundation and moves into the more advanced optimization techniques that modern inference engines use in practice.
+At that point, the high-level split is simple. Prefill is mainly a compute problem. Decode is mainly a memory problem. Good inference systems are built around that split. Part 2 builds on that foundation and moves into the more advanced techniques modern inference engines use in practice.
 
 ## appendix a. Qwen3-32B on H100 SXM accounting
 
-This appendix collects the detailed first-order accounting that the main text intentionally skips. The goal is still not a cycle-accurate runtime model. Instead, the point is to keep the dominant matrix terms, add the smaller per-layer terms that were omitted in the body, and check that they do not change the main roofline conclusion.
+This appendix collects the first-order accounting that the main text skips. It is still not a cycle-accurate runtime model. The goal is to keep the dominant matrix terms, add the smaller per-layer terms omitted in the body, and show that the main roofline conclusion still holds.
 
-Throughout Appendix A, use the Qwen3-32B configuration from the example. To stay consistent with the main text, memory summaries below use rough decimal GB rather than binary GiB.
+Throughout Appendix A, use the Qwen3-32B configuration from the example.
 
 - $64$ transformer layers
 - hidden size $d = 5120$
@@ -431,35 +415,12 @@ $\to$ RMSNorm
 $\to$ gated MLP  
 $\to$ residual add
 
-The dominant FLOPs still come from the dense projections and the attention matmuls, but for completeness we can add smaller terms as well. For a sequence length $S$ inside one layer:
+We will count FLOPs by following that execution order directly. The dense matrix multiplies dominate. This appendix also includes the smaller per-layer terms so the bookkeeping is more complete.
 
-- first RMSNorm: approximately $4Sd$
-- $Q$ projection: $2Sd d_q$
-- $K$ projection: $2Sd d_{kv}$
-- $V$ projection: $2Sd d_{kv}$
-- RoPE on $Q$ and $K$: approximately $3S(d_q + d_{kv})$
-- attention score matmul: depends on prefill vs decode
-- softmax: approximately $5$ FLOPs per attention score element
-- attention-weighted value matmul: depends on prefill vs decode
-- output projection: $2Sd_q d$
-- first residual add: approximately $Sd$
-- second RMSNorm: approximately $4Sd$
-- MLP gate projection: $2Sd d_{ff}$
-- MLP up projection: $2Sd d_{ff}$
-- gating elementwise op: approximately $6Sd_{ff}$
-- MLP down projection: $2Sd_{ff} d$
-- second residual add: approximately $Sd$
+> **Note**
+> A matrix multiply of an $m \times k$ matrix with a $k \times n$ matrix costs about $2mkn$ FLOPs. That is the rule used throughout this appendix.
 
-These constant factors for RMSNorm, RoPE, softmax, and gating are only approximate. That is fine for the purpose here because they are much smaller than the dense matmul terms.
-
-<table>
-  <tr>
-    <td><strong>Note</strong></td>
-    <td>A matrix multiply of an m x k matrix with a k x n matrix costs about 2mkn FLOPs, which is the rule used throughout this appendix.</td>
-  </tr>
-</table>
-
-Qwen3-32B also uses GQA (grouped-query attention)<sup><a href="#reference-15">[15]</a></sup>, so the query side and KV side are intentionally asymmetric:
+Qwen3-32B also uses GQA (grouped-query attention)<sup><a href="#reference-16">[16]</a></sup>, so the query side and KV side are intentionally asymmetric:
 
 - $Q$: $[S \times 5120] \cdot [5120 \times 8192]$
 - $K$: $[S \times 5120] \cdot [5120 \times 1024]$
@@ -472,75 +433,189 @@ That asymmetry reduces both compute and KV-cache size on the KV side.
 
 During prefill, the model processes a prompt of length $T$ in one pass.
 
-For one layer, the projection terms are:
+The embedding lookup itself is mostly a memory-access operation, so we treat it as negligible FLOPs and start from the first transformer block.
+
+#### per-layer prefill FLOPs, step by step
+
+For one layer, let the input hidden state have shape $[T \times d] = [T \times 5120]$.
+
+**1. first RMSNorm**
+
+RMSNorm is an elementwise operation over the hidden width. A rough first-order count is a small constant number of operations per element, which we approximate as $4$ FLOPs.
+
+$$
+F_{\text{RMSNorm}_1}(T) \approx 4Td = 20{,}480\,T
+$$
+
+**2. query projection**
+
+Shapes:
+
+- input: $[T \times 5120]$
+- weight: $[5120 \times 8192]$
+- output: $[T \times 8192]$
 
 $$
 F_Q = 2T \cdot 5120 \cdot 8192 = 83{,}886{,}080\,T
 $$
 
+**3. key projection**
+
+Shapes:
+
+- input: $[T \times 5120]$
+- weight: $[5120 \times 1024]$
+- output: $[T \times 1024]$
+
 $$
 F_K = 2T \cdot 5120 \cdot 1024 = 10{,}485{,}760\,T
 $$
+
+**4. value projection**
+
+Shapes:
+
+- input: $[T \times 5120]$
+- weight: $[5120 \times 1024]$
+- output: $[T \times 1024]$
 
 $$
 F_V = 2T \cdot 5120 \cdot 1024 = 10{,}485{,}760\,T
 $$
 
-$$
-F_O = 2T \cdot 8192 \cdot 5120 = 83{,}886{,}080\,T
-$$
+**5. RoPE on queries and keys**
 
-So the total attention-projection FLOPs per layer are:
-
-$$
-F_{\text{attn proj}}(T) = 188{,}743{,}680\,T
-$$
-
-The gated MLP contributes:
-
-$$
-F_{\text{MLP}}(T)
-= 2T(5120 \cdot 25600 + 5120 \cdot 25600 + 25600 \cdot 5120)
-= 786{,}432{,}000\,T
-$$
-
-The causal attention matmuls contribute:
-
-$$
-F_{QK^\top}(T) = 64 \cdot 2 \cdot 128 \cdot \frac{T(T+1)}{2} = 8192\,T(T+1)
-$$
-
-$$
-F_{\text{attn} \times V}(T) = 8192\,T(T+1)
-$$
-
-$$
-F_{\text{attn matmuls}}(T) = 16{,}384\,T(T+1)
-$$
-
-Now add the smaller per-layer terms:
-
-$$
-F_{\text{RMSNorms}}(T) \approx 8Td = 40{,}960\,T
-$$
+RoPE is another elementwise operation. A common rough count is about $3$ FLOPs per rotated element. Applying it to both $Q$ and $K$ gives:
 
 $$
 F_{\text{RoPE}}(T) \approx 3T(d_q + d_{kv}) = 27{,}648\,T
 $$
 
+**6. attention scores $QK^\top$**
+
+During prefill, each head attends over the full prompt. For one head, the score matrix is $[T \times 128] \cdot [128 \times T] \to [T \times T]$, so the cost is about $2T^2 \cdot 128$ FLOPs. Under a causal mask, only the lower triangle is used, so a first-order count is:
+
+$$
+F_{QK^\top}(T) = 64 \cdot 2 \cdot 128 \cdot \frac{T(T+1)}{2} = 8192\,T(T+1)
+$$
+
+**7. softmax over attention scores**
+
+Softmax is harder to count exactly because the true cost depends on how exp, reduction, and division are implemented. For a simple first-order model, we approximate it as $5$ FLOPs per score element:
+
 $$
 F_{\text{softmax}}(T) \approx 5 \cdot 64 \cdot \frac{T(T+1)}{2} = 160\,T(T+1)
 $$
 
+**8. attention output $(QK^\top)V$**
+
+For one head, this is $[T \times T] \cdot [T \times 128] \to [T \times 128]$, again under a causal mask:
+
 $$
-F_{\text{residual adds}}(T) \approx 2Td = 10{,}240\,T
+F_{\text{attn} \times V}(T) = 64 \cdot 2 \cdot 128 \cdot \frac{T(T+1)}{2} = 8192\,T(T+1)
 $$
+
+**9. output projection**
+
+Shapes:
+
+- input: $[T \times 8192]$
+- weight: $[8192 \times 5120]$
+- output: $[T \times 5120]$
+
+$$
+F_O = 2T \cdot 8192 \cdot 5120 = 83{,}886{,}080\,T
+$$
+
+**10. first residual add**
+
+Adding the attention output back to the residual stream is one addition per hidden element:
+
+$$
+F_{\text{residual}_1}(T) \approx Td = 5120\,T
+$$
+
+**11. second RMSNorm**
+
+$$
+F_{\text{RMSNorm}_2}(T) \approx 4Td = 20{,}480\,T
+$$
+
+**12. MLP gate projection**
+
+Shapes:
+
+- input: $[T \times 5120]$
+- weight: $[5120 \times 25600]$
+- output: $[T \times 25600]$
+
+$$
+F_{\text{gate proj}}(T) = 2T \cdot 5120 \cdot 25600 = 262{,}144{,}000\,T
+$$
+
+**13. MLP up projection**
+
+Shapes:
+
+- input: $[T \times 5120]$
+- weight: $[5120 \times 25600]$
+- output: $[T \times 25600]$
+
+$$
+F_{\text{up proj}}(T) = 2T \cdot 5120 \cdot 25600 = 262{,}144{,}000\,T
+$$
+
+**14. gating elementwise operation**
+
+For the gated activation, we use a rough $6$-FLOP estimate per intermediate element:
 
 $$
 F_{\text{gating}}(T) \approx 6Td_{ff} = 153{,}600\,T
 $$
 
-So a more complete per-layer prefill total is:
+**15. MLP down projection**
+
+Shapes:
+
+- input: $[T \times 25600]$
+- weight: $[25600 \times 5120]$
+- output: $[T \times 5120]$
+
+$$
+F_{\text{down proj}}(T) = 2T \cdot 25600 \cdot 5120 = 262{,}144{,}000\,T
+$$
+
+**16. second residual add**
+
+$$
+F_{\text{residual}_2}(T) \approx Td = 5120\,T
+$$
+
+Collecting those terms:
+
+$$
+F_{\text{attn proj}}(T) = F_Q + F_K + F_V + F_O = 188{,}743{,}680\,T
+$$
+
+$$
+F_{\text{MLP}}(T)
+= F_{\text{gate proj}}(T) + F_{\text{up proj}}(T) + F_{\text{down proj}}(T)
+= 786{,}432{,}000\,T
+$$
+
+$$
+F_{\text{attn matmuls}}(T) = F_{QK^\top}(T) + F_{\text{attn} \times V}(T) = 16{,}384\,T(T+1)
+$$
+
+$$
+F_{\text{RMSNorms}}(T) = F_{\text{RMSNorm}_1}(T) + F_{\text{RMSNorm}_2}(T) \approx 40{,}960\,T
+$$
+
+$$
+F_{\text{residual adds}}(T) = F_{\text{residual}_1}(T) + F_{\text{residual}_2}(T) \approx 10{,}240\,T
+$$
+
+So the full first-order prefill total for one layer is:
 
 $$
 F_{\text{layer, prefill}}(T)
@@ -668,53 +743,133 @@ Even after including the smaller per-layer terms, prefill stays comfortably on t
 
 During decode, we generate one new token while attending over an existing context of length $L$.
 
-For one layer, the projection and MLP terms are just the prefill formulas evaluated at one token:
+The execution order is the same as in prefill, but now each dense layer is applied to one new token while attention reads across the existing KV cache.
+
+#### per-layer decode FLOPs, step by step
+
+For one layer, let the new-token hidden state have shape $[1 \times d] = [1 \times 5120]$.
+
+**1. first RMSNorm**
 
 $$
-F_{\text{attn proj, decode}} = 188{,}743{,}680
+F_{\text{RMSNorm}_1,\text{decode}} \approx 4d = 20{,}480
 $$
 
+**2. query projection**
+
 $$
-F_{\text{MLP, decode}} = 786{,}432{,}000
+F_{Q,\text{decode}} = 2 \cdot 5120 \cdot 8192 = 83{,}886{,}080
 $$
 
-The two attention matmuls scale linearly with context length:
+**3. key projection**
+
+$$
+F_{K,\text{decode}} = 2 \cdot 5120 \cdot 1024 = 10{,}485{,}760
+$$
+
+**4. value projection**
+
+$$
+F_{V,\text{decode}} = 2 \cdot 5120 \cdot 1024 = 10{,}485{,}760
+$$
+
+**5. RoPE on the new query and key**
+
+$$
+F_{\text{RoPE, decode}} \approx 3(d_q + d_{kv}) = 27{,}648
+$$
+
+**6. attention scores $QK^\top$**
+
+Now the new query attends over $L$ previous positions. For each head this is $[1 \times 128] \cdot [128 \times L] \to [1 \times L]$:
 
 $$
 F_{QK^\top,\text{decode}}(L) = 64 \cdot 2 \cdot 128 \cdot L = 16{,}384\,L
 $$
 
-$$
-F_{\text{attn} \times V,\text{decode}}(L) = 16{,}384\,L
-$$
-
-$$
-F_{\text{attn matmuls, decode}}(L) = 32{,}768\,L
-$$
-
-Now add the smaller per-layer terms for one token:
-
-$$
-F_{\text{RMSNorms, decode}} \approx 40{,}960
-$$
-
-$$
-F_{\text{RoPE, decode}} \approx 27{,}648
-$$
+**7. softmax over the $L$ scores per head**
 
 $$
 F_{\text{softmax, decode}}(L) \approx 5 \cdot 64 \cdot L = 320\,L
 $$
 
+**8. attention output $(QK^\top)V$**
+
 $$
-F_{\text{residual adds, decode}} \approx 10{,}240
+F_{\text{attn} \times V,\text{decode}}(L) = 16{,}384\,L
+$$
+
+**9. output projection**
+
+$$
+F_{O,\text{decode}} = 2 \cdot 8192 \cdot 5120 = 83{,}886{,}080
+$$
+
+**10. first residual add**
+
+$$
+F_{\text{residual}_1,\text{decode}} \approx d = 5120
+$$
+
+**11. second RMSNorm**
+
+$$
+F_{\text{RMSNorm}_2,\text{decode}} \approx 4d = 20{,}480
+$$
+
+**12. MLP gate projection**
+
+$$
+F_{\text{gate proj, decode}} = 2 \cdot 5120 \cdot 25600 = 262{,}144{,}000
+$$
+
+**13. MLP up projection**
+
+$$
+F_{\text{up proj, decode}} = 2 \cdot 5120 \cdot 25600 = 262{,}144{,}000
+$$
+
+**14. gating elementwise operation**
+
+$$
+F_{\text{gating, decode}} \approx 6d_{ff} = 153{,}600
+$$
+
+**15. MLP down projection**
+
+$$
+F_{\text{down proj, decode}} = 2 \cdot 25600 \cdot 5120 = 262{,}144{,}000
+$$
+
+**16. second residual add**
+
+$$
+F_{\text{residual}_2,\text{decode}} \approx d = 5120
+$$
+
+Collecting the decode terms:
+
+$$
+F_{\text{attn proj, decode}} = F_{Q,\text{decode}} + F_{K,\text{decode}} + F_{V,\text{decode}} + F_{O,\text{decode}} = 188{,}743{,}680
 $$
 
 $$
-F_{\text{gating, decode}} \approx 153{,}600
+F_{\text{MLP, decode}} = F_{\text{gate proj, decode}} + F_{\text{up proj, decode}} + F_{\text{down proj, decode}} = 786{,}432{,}000
 $$
 
-So a more complete per-layer decode total is:
+$$
+F_{\text{attn matmuls, decode}}(L) = F_{QK^\top,\text{decode}}(L) + F_{\text{attn} \times V,\text{decode}}(L) = 32{,}768\,L
+$$
+
+$$
+F_{\text{RMSNorms, decode}} \approx F_{\text{RMSNorm}_1,\text{decode}} + F_{\text{RMSNorm}_2,\text{decode}} = 40{,}960
+$$
+
+$$
+F_{\text{residual adds, decode}} \approx F_{\text{residual}_1,\text{decode}} + F_{\text{residual}_2,\text{decode}} = 10{,}240
+$$
+
+So the full first-order decode total for one layer is:
 
 $$
 F_{\text{layer, decode}}(L)
@@ -821,7 +976,7 @@ $$
 AI_{\text{decode}}(L) \to \frac{2{,}117{,}632}{262{,}144} \approx 8.08 \ \text{FLOPs/byte}
 $$
 
-Those numbers are only slightly different from the dominant-terms-only version. That is the main reason the body of the article can stay result-focused: once you include RMSNorm, RoPE, softmax, residual adds, and gating terms, the qualitative conclusion does not change. Decode stays firmly memory-bound.
+Those numbers are only slightly different from the dominant-terms-only version. That is why the main text does not need to dwell on every small term: once you include RMSNorm, RoPE, softmax, residual adds, and gating terms, the qualitative conclusion does not change. Decode stays firmly memory-bound.
 
 
 ## references
@@ -843,6 +998,7 @@ This post was heavily inspired by [LLM Inference Economics From First Principles
   <li id="reference-12">vLLM Omni documentation, "GPU Memory Utilization" - helpful for thinking about GPU memory terms during serving. <a href="https://docs.vllm.ai/projects/vllm-omni/en/latest/configuration/gpu_memory_utilization/">Link</a></li>
   <li id="reference-13">Google Cloud, "BFloat16: The secret to high performance on Cloud TPUs" - background for the bf16 assumptions used in the examples. <a href="https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus?hl=en">Link</a></li>
   <li id="reference-14">vLLM Omni documentation, "Activation Memory" - the source behind the rough activation-memory heuristic. <a href="https://docs.vllm.ai/projects/vllm-omni/en/latest/configuration/gpu_memory_utilization/#activation-memory">Link</a></li>
-  <li id="reference-15">IBM, "What is Grouped-Query Attention?" - a readable explainer for GQA. <a href="https://www.ibm.com/think/topics/grouped-query-attention">Link</a></li>
-  <li id="reference-16">BentoML, "LLM Inference Metrics" - a good follow-up for a broader survey of serving metrics. <a href="https://bentoml.com/llm/inference-optimization/llm-inference-metrics">Link</a></li>
+  <li id="reference-15">Hugging Face, "Qwen/Qwen3-32B" - model page for the Qwen3-32B example used in this article. <a href="https://huggingface.co/Qwen/Qwen3-32B">Link</a></li>
+  <li id="reference-16">IBM, "What is Grouped-Query Attention?" - a readable explainer for GQA. <a href="https://www.ibm.com/think/topics/grouped-query-attention">Link</a></li>
+  <li id="reference-17">BentoML, "LLM Inference Metrics" - a good follow-up for a broader survey of serving metrics. <a href="https://bentoml.com/llm/inference-optimization/llm-inference-metrics">Link</a></li>
 </ol>
