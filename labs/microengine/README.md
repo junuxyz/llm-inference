@@ -84,7 +84,7 @@ With that framing, `microengine` keeps the serving loop split into a few explici
 Run the demo directly:
 
 ```bash
-python projects/microengine/example.py
+python labs/microengine/example.py
 ```
 
 The example constructs a `MicroEngine`, submits a few prompts, runs the engine, and prints each final decoded output.
