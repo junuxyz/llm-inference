@@ -4,7 +4,7 @@
   <img src="../../assets/labs/microengine/microengine_1.png" alt="microengine diagram" width="480" />
 </p>
 
-`microengine` is a minimal inference engine built to keep the core serving components small, readable, and centered on
+`microengine` is a minimal serving system built to keep the core serving components small, readable, and centered on
   the essential moving parts:
 
 - requests
@@ -25,7 +25,7 @@
 
 ## Mental model
 
-The engine is easiest to read as this loop:
+The serving system is easiest to read as this loop:
 
 1. Submit requests into the queue.
 2. The scheduler picks the next static batch.
@@ -37,14 +37,14 @@ The engine is easiest to read as this loop:
 That's it.
 
 
-> Note: This is intentionally a batch-to-completion, static-batching engine.
+> Note: This is intentionally a batch-to-completion, static-batching serving system.
 Real serving systems usually add more machinery on top of this core loop, such as token streaming, scheduler re-entry,
 request-level metrics, and more flexible execution policies.
 
 
 ## Components and responsibilities
 
-Even across modern inference frameworks, component names and responsibilities differ a bit. There is no single source of truth for how an inference engine should be decomposed.
+Even across modern inference frameworks, component names and responsibilities differ a bit. There is no single source of truth for how a serving system should be decomposed.
 
 Because of that, `microengine` is best treated as a small mental model for understanding the serving loop holistically rather than a canonical architecture.
 
@@ -79,10 +79,14 @@ With that framing, `microengine` keeps the serving loop split into a few explici
   1. `prefill()` runs the prompt pass for a newly admitted batch.
   2. `decode()` advances that batch by one token.
 
-- `MicroEngine`
+- `ServingSystem`
 
   Ties the whole loop together.
   It loads the tokenizer and model, accepts requests through `submit()`, asks the scheduler for the next batch, runs prefill, and then keeps decoding until every request in that batch is done.
+
+- `MicroEngine`
+
+  Backward-compatible wrapper around `ServingSystem`.
 
 ## Example
 
@@ -92,7 +96,7 @@ Run the demo directly:
 python labs/microengine/example.py
 ```
 
-The example constructs a `MicroEngine`, submits a few prompts, runs the engine, and prints each final decoded output.
+The example constructs a `ServingSystem`, submits a few prompts, runs the system, and prints each final decoded output.
 
 
 ## Todo

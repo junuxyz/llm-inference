@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from microengine import MicroEngine
+from microengine import ServingSystem
 
 
 def main() -> None:
-    engine = MicroEngine(
+    engine = ServingSystem(
         model_name="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
         max_batch_size=2,
         max_new_tokens=40,

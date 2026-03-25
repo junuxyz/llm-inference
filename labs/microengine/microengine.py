@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
 class RequestState(StrEnum):
@@ -90,7 +90,7 @@ class RequestQueue:
 class StaticBatchScheduler:
     """Select the next fixed-size batch from the request queue."""
 
-    def __init__(self, request_queue: RequestQueue, max_batch_size: int = 4):
+    def __init__(self, request_queue: RequestQueue, max_batch_size: int):
         if max_batch_size < 1:
             raise ValueError("max_batch_size must be >= 1")
         self.request_queue = request_queue
@@ -134,8 +134,11 @@ class ModelRunner:
         dtype: torch.dtype,
     ):
         self.device = torch.device(device)
+        config = AutoConfig.from_pretrained(model_name)
+        config.tie_word_embeddings = False
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
+            config=config,
             dtype=dtype,
         ).to(self.device)
         self.model.eval()
@@ -211,8 +214,8 @@ class ModelRunner:
         return self._greedy_select(outputs.logits[:, -1, :])
 
 
-class MicroEngine:
-    """Minimal static-batching engine built around a queue and decode loop."""
+class ServingSystem:
+    """Minimal static-batching serving system built around a queue and decode loop."""
 
     def __init__(
         self,
@@ -314,3 +317,7 @@ class MicroEngine:
                     [request.output_ids[-1] for request in batch.requests],
                     device=self.runner.device,
                 )
+
+
+class MicroEngine(ServingSystem):
+    """Backward-compatible wrapper for the original microengine entrypoint name."""

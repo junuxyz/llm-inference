@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 
 class RequestState(StrEnum):
@@ -195,8 +195,11 @@ class ModelRunner:
         dtype: torch.dtype,
     ):
         self.device = torch.device(device)
+        config = AutoConfig.from_pretrained(model_name)
+        config.tie_word_embeddings = False
         self.model = AutoModelForCausalLM.from_pretrained(
             model_name,
+            config=config,
             dtype=dtype,
         ).to(self.device)
         self.model.eval()
@@ -281,8 +284,8 @@ class TokenOutput:
     token_id: int
 
 
-class BaselineEngine:
-    """Minimal static-batching engine built around a queue and decode loop for comparison work."""
+class ServingSystem:
+    """Minimal static-batching serving system built around a queue and decode loop for comparison work."""
 
     def __init__(
         self,
@@ -401,8 +404,13 @@ class BaselineEngine:
                 )
 
 
+class BaselineEngine(ServingSystem):
+    """Backward-compatible wrapper for the original baseline entrypoint name."""
+
+
 __all__ = [
     "BaselineEngine",
+    "ServingSystem",
     "BatchState",
     "ModelRunner",
     "Request",

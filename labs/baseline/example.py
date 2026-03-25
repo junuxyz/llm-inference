@@ -6,10 +6,10 @@ from rich.console import Group
 from rich.live import Live
 from rich.text import Text
 
-from labs.baseline import BaselineEngine, Request
+from labs.baseline import Request, ServingSystem
 
 
-def build_chat_prompt(engine: BaselineEngine, user_text: str) -> str:
+def build_chat_prompt(engine: ServingSystem, user_text: str) -> str:
     return engine.tokenizer.apply_chat_template(
         [{"role": "user", "content": user_text}],
         tokenize=False,
@@ -17,14 +17,14 @@ def build_chat_prompt(engine: BaselineEngine, user_text: str) -> str:
     )
 
 
-def submit_chat_requests(engine: BaselineEngine, prompts: list[str]) -> list[Request]:
+def submit_chat_requests(engine: ServingSystem, prompts: list[str]) -> list[Request]:
     return [
         engine.submit(f"r{index}", build_chat_prompt(engine, prompt))
         for index, prompt in enumerate(prompts, start=1)
     ]
 
 
-def build_renderable(engine: BaselineEngine, requests: list[Request]) -> Group:
+def build_renderable(engine: ServingSystem, requests: list[Request]) -> Group:
     lines: list[Text] = []
     for request in requests:
         current_text = engine.tokenizer.decode(
@@ -35,7 +35,7 @@ def build_renderable(engine: BaselineEngine, requests: list[Request]) -> Group:
     return Group(*lines)
 
 
-def render_stream(engine: BaselineEngine, requests: list[Request]) -> None:
+def render_stream(engine: ServingSystem, requests: list[Request]) -> None:
     if sys.stdout.isatty():
         with Live(build_renderable(engine, requests), auto_refresh=False) as live:
             for _ in engine.run():
@@ -51,7 +51,7 @@ def render_stream(engine: BaselineEngine, requests: list[Request]) -> None:
 
 
 def main() -> None:
-    engine = BaselineEngine(
+    engine = ServingSystem(
         model_name="Qwen/Qwen3-0.6B",
         max_batch_size=2,
         max_new_tokens=100,

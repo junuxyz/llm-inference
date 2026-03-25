@@ -7,12 +7,14 @@ from .baseline_engine import (
     RequestQueue,
     RequestState,
     SamplingConfig,
+    ServingSystem,
     StaticBatchScheduler,
     TokenOutput,
 )
 
 __all__ = [
     "BaselineEngine",
+    "ServingSystem",
     "BatchState",
     "ModelRunner",
     "Request",
