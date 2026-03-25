@@ -5,7 +5,7 @@ Currently focusing on LLM serving system and inference optimization.
 
 ## Notes
 - [Introduction to LLM Inference Part 1](notes/llm-inference-intro-p1.md)
-- [ORCA](notes/orca.md)
+- [ORCA paper review](notes/orca.md)
 
 ## Projects
-- [tinyengine](engines/tinyengine/README.md) (WIP): a minimal serving engine
+- [microengine](projects/microengine/README.md): a minimal serving engine
