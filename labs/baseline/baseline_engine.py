@@ -154,7 +154,7 @@ class Endpoint:
     def __init__(
         self,
         tokenizer: AutoTokenizer,
-        request_queue: RequestQueue,
+        request_queue,
         *,
         default_sampling: SamplingConfig,
         eos_token_id: int,
