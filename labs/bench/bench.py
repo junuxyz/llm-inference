@@ -1,127 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import random
 import statistics
 import time
-from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import torch
+import torch
+from transformers import AutoTokenizer
 
-    from labs.baseline import Request
+from labs.baseline import SamplingConfig, ServingSystem
 
-
-DEFAULT_PROMPT = "The capital of France is"
 DEFAULT_MODEL = "Qwen/Qwen3-0.6B"
+DTYPE_BY_NAME = {
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+    "float32": torch.float32,
+}
+WORKLOAD = ("128x128", 128, 128)
 
 
-@dataclass(frozen=True, slots=True)
-class MetricSummary:
-    mean_ms: float | None
-    p50_ms: float | None
-    p95_ms: float | None
-    p99_ms: float | None
-
-
-@dataclass(frozen=True, slots=True)
-class BenchmarkResult:
-    model_name: str
-    num_requests: int
-    warmup_requests: int
-    unique_prompts: int
-    max_batch_size: int
-    max_new_tokens: int
-    device: str
-    dtype: str
-    elapsed_s: float
-    total_input_tokens: int
-    total_output_tokens: int
-    total_tokens: int
-    requests_per_s: float
-    input_tokens_per_s: float
-    output_tokens_per_s: float
-    total_tokens_per_s: float
-    ttft_ms: MetricSummary
-    tpot_ms: MetricSummary
-    e2e_ms: MetricSummary
-
-
-def parse_arguments() -> argparse.Namespace:
-    """Parse benchmark CLI arguments."""
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Benchmark the minimal baseline engine."
+        description="Benchmark the baseline engine on one fixed 128x128 workload."
     )
-
-    model_group = parser.add_argument_group("model")
-    model_group.add_argument(
-        "--model",
-        default=DEFAULT_MODEL,
-        help="Hugging Face model name.",
-    )
-    model_group.add_argument(
-        "--device",
-        default=None,
-        help="Execution device. Defaults to cuda when available, else cpu.",
-    )
-    model_group.add_argument(
-        "--dtype",
-        choices=("bfloat16", "float16", "float32"),
-        default=None,
-        help="Tensor dtype. Defaults to bfloat16 on cuda, else float32.",
-    )
-
-    workload_group = parser.add_argument_group("workload")
-    workload_group.add_argument(
-        "--prompt",
-        default=DEFAULT_PROMPT,
-        help="Prompt text used when --prompt-file is not set.",
-    )
-    workload_group.add_argument(
-        "--prompt-file",
-        type=Path,
-        default=None,
-        help="Optional text file with one prompt per line.",
-    )
-    workload_group.add_argument(
-        "--numseqs",
-        "--num-requests",
-        dest="num_requests",
-        type=int,
-        default=8,
-        help="Number of measured requests to submit.",
-    )
-    workload_group.add_argument(
-        "--warmup-requests",
-        type=int,
-        default=2,
-        help="Warmup requests to run before the measured workload.",
-    )
-    workload_group.add_argument(
-        "--max-batch-size",
-        "--b",
-        dest="max_batch_size",
-        type=int,
-        default=4,
-        help="Static batch size.",
-    )
-    workload_group.add_argument(
-        "--max-new-tokens",
-        "--output-len",
-        dest="max_new_tokens",
-        type=int,
-        default=64,
-        help="Maximum generated tokens per request.",
-    )
-
-    output_group = parser.add_argument_group("output")
-    output_group.add_argument(
-        "--json",
-        action="store_true",
-        help="Print machine-readable JSON instead of plain text.",
-    )
-
+    parser.add_argument("--model", default=DEFAULT_MODEL)
+    parser.add_argument("--device", default=None)
+    parser.add_argument("--dtype", choices=tuple(DTYPE_BY_NAME), default=None)
+    parser.add_argument("--num-requests", type=int, default=8)
+    parser.add_argument("--warmup-requests", type=int, default=2)
+    parser.add_argument("--max-batch-size", type=int, default=4)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
     if args.num_requests < 1:
         raise ValueError("--num-requests must be >= 1")
@@ -129,307 +37,231 @@ def parse_arguments() -> argparse.Namespace:
         raise ValueError("--warmup-requests must be >= 0")
     if args.max_batch_size < 1:
         raise ValueError("--max-batch-size must be >= 1")
-    if args.max_new_tokens < 1:
-        raise ValueError("--max-new-tokens must be >= 1")
     return args
 
 
-def resolve_dtype(dtype_name: str) -> torch.dtype:
-    """Resolve a CLI dtype name to a torch dtype."""
-    import torch
+def single_token_texts(tokenizer) -> tuple[list[str], list[str]]:
+    cached = getattr(tokenizer, "_bench_single_token_texts", None)
+    if cached is not None:
+        return cached
 
-    mapping = {
-        "bfloat16": torch.bfloat16,
-        "float16": torch.float16,
-        "float32": torch.float32,
+    special_ids = {
+        token_id
+        for token_id in (
+            tokenizer.bos_token_id,
+            tokenizer.eos_token_id,
+            tokenizer.pad_token_id,
+            tokenizer.unk_token_id,
+        )
+        if token_id is not None
     }
-    try:
-        return mapping[dtype_name]
-    except KeyError as exc:
-        raise ValueError(f"Unsupported dtype: {dtype_name}") from exc
+    plain: list[str] = []
+    spaced: list[str] = []
+    vocab_size = max(int(tokenizer.vocab_size or len(tokenizer)), 1)
+
+    for token_id in range(vocab_size):
+        if token_id in special_ids:
+            continue
+        text = tokenizer.decode(
+            [token_id], skip_special_tokens=False, clean_up_tokenization_spaces=False
+        )
+        if not text or not text.strip():
+            continue
+        if tokenizer.encode(text, add_special_tokens=False, verbose=False) != [
+            token_id
+        ]:
+            continue
+        if text[0].isspace():
+            spaced.append(text)
+        else:
+            plain.append(text)
+
+    if not plain:
+        raise ValueError("Failed to find any stable single-token text pieces")
+    cached = (plain, spaced or plain)
+    tokenizer._bench_single_token_texts = cached
+    return cached
 
 
-def load_prompts(args: argparse.Namespace) -> list[str]:
-    """Load prompts from a file or fall back to one inline prompt."""
-    if args.prompt_file is None:
-        return [args.prompt]
+def synthetic_prompt(tokenizer, prompt_tokens: int, seed: int) -> str:
+    plain, spaced = single_token_texts(tokenizer)
+    rng = random.Random(seed)
+    first_candidates = rng.sample(plain, k=min(len(plain), 64))
+    rest_candidates = rng.sample(spaced, k=min(len(spaced), 64))
 
-    prompts = [
-        line.strip()
-        for line in args.prompt_file.read_text().splitlines()
-        if line.strip()
-    ]
-    if not prompts:
-        raise ValueError(f"No prompts found in {args.prompt_file}")
-    return prompts
+    for first in first_candidates:
+        if prompt_tokens == 1:
+            return first
+        for rest in rest_candidates:
+            text = first + rest * (prompt_tokens - 1)
+            ids = tokenizer.encode(text, add_special_tokens=False, verbose=False)
+            if len(ids) == prompt_tokens:
+                return text
+    raise ValueError(f"Failed to build a prompt with exactly {prompt_tokens} tokens")
 
 
-def percentile(values: list[float], fraction: float) -> float | None:
-    """Compute one percentile from a non-empty metric list."""
+def percentile(values: list[float], q: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]
-
-    rank = (len(ordered) - 1) * fraction
-    lower = int(rank)
-    upper = min(lower + 1, len(ordered) - 1)
-    weight = rank - lower
-    return ordered[lower] * (1 - weight) + ordered[upper] * weight
+    rank = (len(ordered) - 1) * q
+    lo = int(rank)
+    hi = min(lo + 1, len(ordered) - 1)
+    return ordered[lo] * (hi - rank) + ordered[hi] * (rank - lo)
 
 
-def summarize_metric(values_s: list[float]) -> MetricSummary:
-    """Aggregate latency values into mean and percentile summaries."""
+def summarize_ms(values_s: list[float]) -> list[float | None]:
     if not values_s:
-        return MetricSummary(
-            mean_ms=None,
-            p50_ms=None,
-            p95_ms=None,
-            p99_ms=None,
-        )
-
+        return [None, None, None, None]
     values_ms = [value * 1000.0 for value in values_s]
-    return MetricSummary(
-        mean_ms=statistics.fmean(values_ms),
-        p50_ms=percentile(values_ms, 0.50),
-        p95_ms=percentile(values_ms, 0.95),
-        p99_ms=percentile(values_ms, 0.99),
-    )
-
-
-def build_requests(
-    engine,
-    prompts: list[str],
-    *,
-    num_requests: int,
-    request_prefix: str,
-) -> list[Request]:
-    """Submit requests by cycling through the available prompts."""
     return [
-        engine.submit(
-            f"{request_prefix}{index}",
-            prompts[(index - 1) % len(prompts)],
-        )
-        for index in range(1, num_requests + 1)
+        statistics.fmean(values_ms),
+        percentile(values_ms, 0.50),
+        percentile(values_ms, 0.95),
+        percentile(values_ms, 0.99),
     ]
 
 
-def run_engine(engine) -> float:
-    """Run the engine once and return the measured makespan."""
-    started_at = time.perf_counter()
-    for _output in engine.run():
-        pass
-    return time.perf_counter() - started_at
+def collect_metrics(requests: list[object]) -> dict[str, list[float | None]]:
+    ttft_s: list[float] = []
+    tpot_s: list[float] = []
+    e2e_s: list[float] = []
+    for request in requests:
+        submitted_at = request.metrics.submitted_at
+        first_token_at = request.metrics.first_token_at
+        finished_at = request.metrics.finished_at
+        if submitted_at is not None and first_token_at is not None:
+            ttft_s.append(first_token_at - submitted_at)
+        if (
+            first_token_at is not None
+            and finished_at is not None
+            and len(request.output_ids) >= 2
+        ):
+            tpot_s.append(
+                (finished_at - first_token_at) / (len(request.output_ids) - 1)
+            )
+        if submitted_at is not None and finished_at is not None:
+            e2e_s.append(finished_at - submitted_at)
+    return {
+        "ttft": summarize_ms(ttft_s),
+        "tpot": summarize_ms(tpot_s),
+        "e2e": summarize_ms(e2e_s),
+    }
 
 
-def summarize_requests(
-    *,
-    requests: list[Request],
-    model_name: str,
-    warmup_requests: int,
-    unique_prompts: int,
-    max_batch_size: int,
-    max_new_tokens: int,
+def format_float(value: float | None, digits: int = 2) -> str:
+    return "-" if value is None else f"{value:.{digits}f}"
+
+
+def print_table(headers: list[str], rows: list[list[str]]) -> None:
+    widths = [
+        max(len(header), *(len(row[i]) for row in rows))
+        for i, header in enumerate(headers)
+    ]
+    print("  ".join(header.ljust(widths[i]) for i, header in enumerate(headers)))
+    print("  ".join("-" * widths[i] for i in range(len(headers))))
+    for row in rows:
+        print("  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)))
+
+
+def run_case(
+    args: argparse.Namespace,
+    tokenizer,
     device: str,
     dtype_name: str,
-    elapsed_s: float,
-) -> BenchmarkResult:
-    """Aggregate per-request metrics into one result."""
-    total_input_tokens = sum(len(request.prompt_ids) for request in requests)
-    total_output_tokens = sum(len(request.output_ids) for request in requests)
-
-    ttfts_s = [
-        request.metrics.ttft_s
-        for request in requests
-        if request.metrics.ttft_s is not None
-    ]
-    tpots_s = [
-        request.metrics.tpot_s
-        for request in requests
-        if request.metrics.tpot_s is not None
-    ]
-    e2e_s = [
-        request.metrics.finished_at - request.metrics.submitted_at
-        for request in requests
-        if request.metrics.submitted_at is not None
-        and request.metrics.finished_at is not None
-    ]
-    total_tokens = total_input_tokens + total_output_tokens
-
-    return BenchmarkResult(
-        model_name=model_name,
-        num_requests=len(requests),
-        warmup_requests=warmup_requests,
-        unique_prompts=unique_prompts,
-        max_batch_size=max_batch_size,
-        max_new_tokens=max_new_tokens,
-        device=device,
-        dtype=dtype_name,
-        elapsed_s=elapsed_s,
-        total_input_tokens=total_input_tokens,
-        total_output_tokens=total_output_tokens,
-        total_tokens=total_tokens,
-        requests_per_s=len(requests) / elapsed_s if elapsed_s > 0 else 0.0,
-        input_tokens_per_s=(total_input_tokens / elapsed_s if elapsed_s > 0 else 0.0),
-        output_tokens_per_s=(total_output_tokens / elapsed_s if elapsed_s > 0 else 0.0),
-        total_tokens_per_s=total_tokens / elapsed_s if elapsed_s > 0 else 0.0,
-        ttft_ms=summarize_metric(ttfts_s),
-        tpot_ms=summarize_metric(tpots_s),
-        e2e_ms=summarize_metric(e2e_s),
-    )
-
-
-def run_benchmark(
-    *,
-    model_name: str,
-    prompts: list[str],
-    num_requests: int,
-    warmup_requests: int,
-    max_batch_size: int,
-    max_new_tokens: int,
-    device: str,
     dtype: torch.dtype,
-    dtype_name: str,
-) -> BenchmarkResult:
-    """Run the benchmark workload and return a summary."""
-    from labs.baseline import BaselineEngine
+    workload_name: str,
+    prompt_tokens: int,
+    output_tokens: int,
+) -> None:
+    total = args.num_requests + args.warmup_requests
+    samples = [
+        (
+            synthetic_prompt(tokenizer, prompt_tokens, args.seed + index),
+            SamplingConfig(max_new_tokens=output_tokens),
+        )
+        for index in range(total)
+    ]
+    warmup = samples[: args.warmup_requests]
+    measured = samples[args.warmup_requests :]
 
-    engine = BaselineEngine(
-        model_name=model_name,
-        max_batch_size=max_batch_size,
-        max_new_tokens=max_new_tokens,
+    serve = ServingSystem(
+        model_name=args.model,
+        max_batch_size=args.max_batch_size,
+        max_new_tokens=output_tokens,
         device=device,
         dtype=dtype,
     )
 
-    if warmup_requests > 0:
-        build_requests(
-            engine,
-            prompts,
-            num_requests=warmup_requests,
-            request_prefix="warmup-",
-        )
-        run_engine(engine)
+    for prompt_text, sampling in warmup:
+        serve.submit(prompt_text=prompt_text, sampling=sampling)
+    for _ in serve.run():
+        pass
 
-    requests = build_requests(
-        engine,
-        prompts,
-        num_requests=num_requests,
-        request_prefix="req-",
-    )
-    elapsed_s = run_engine(engine)
-
-    return summarize_requests(
-        requests=requests,
-        model_name=model_name,
-        warmup_requests=warmup_requests,
-        unique_prompts=len(set(prompts)),
-        max_batch_size=max_batch_size,
-        max_new_tokens=max_new_tokens,
-        device=device,
-        dtype_name=dtype_name,
-        elapsed_s=elapsed_s,
-    )
-
-
-def format_float(value: float | None, digits: int = 2) -> str:
-    """Format an optional float for table output."""
-    if value is None:
-        return "-"
-    return f"{value:.{digits}f}"
-
-
-def print_table(headers: list[str], rows: list[list[str]]) -> None:
-    """Print a compact aligned text table."""
-    widths = [
-        max(len(header), *(len(row[index]) for row in rows))
-        for index, header in enumerate(headers)
+    requests = [
+        serve.submit(prompt_text=prompt_text, sampling=sampling)
+        for prompt_text, sampling in measured
     ]
-    header_line = "  ".join(
-        header.ljust(widths[index]) for index, header in enumerate(headers)
-    )
-    separator_line = "  ".join("-" * width for width in widths)
-    print(header_line)
-    print(separator_line)
-    for row in rows:
-        print("  ".join(cell.ljust(widths[index]) for index, cell in enumerate(row)))
+    started_at = time.perf_counter()
+    for _ in serve.run():
+        pass
+    elapsed_s = time.perf_counter() - started_at
 
+    total_input_tokens = sum(len(request.prompt_ids) for request in requests)
+    total_output_tokens = sum(len(request.output_ids) for request in requests)
+    total_tokens = total_input_tokens + total_output_tokens
+    metrics = collect_metrics(requests)
 
-def print_result(result: BenchmarkResult) -> None:
-    """Print the result in a compact table format."""
-    print(result.model_name)
-    print(f"{result.device} / {result.dtype}")
+    print(args.model)
+    print(f"{device} / {dtype_name}")
+    print(f"workload: {workload_name} ({prompt_tokens}, {output_tokens})")
     print()
-
     print_table(
         ["field", "value"],
         [
-            ["requests", str(result.num_requests)],
-            ["warmup", str(result.warmup_requests)],
-            ["unique_prompts", str(result.unique_prompts)],
-            ["batch", str(result.max_batch_size)],
-            ["max_new_tokens", str(result.max_new_tokens)],
-            ["elapsed_s", format_float(result.elapsed_s, digits=3)],
-            ["requests_per_s", format_float(result.requests_per_s, digits=3)],
-            ["input_tok_per_s", format_float(result.input_tokens_per_s, digits=3)],
-            ["output_tok_per_s", format_float(result.output_tokens_per_s, digits=3)],
-            ["total_tok_per_s", format_float(result.total_tokens_per_s, digits=3)],
-            ["input_tokens", str(result.total_input_tokens)],
-            ["output_tokens", str(result.total_output_tokens)],
-            ["total_tokens", str(result.total_tokens)],
+            ["requests", str(args.num_requests)],
+            ["warmup", str(args.warmup_requests)],
+            ["batch", str(args.max_batch_size)],
+            ["elapsed_s", format_float(elapsed_s, 3)],
+            ["requests_per_s", format_float(args.num_requests / elapsed_s, 3)],
+            ["input_tok_per_s", format_float(total_input_tokens / elapsed_s, 3)],
+            ["output_tok_per_s", format_float(total_output_tokens / elapsed_s, 3)],
+            ["total_tok_per_s", format_float(total_tokens / elapsed_s, 3)],
+            ["input_tokens", str(total_input_tokens)],
+            ["output_tokens", str(total_output_tokens)],
+            ["total_tokens", str(total_tokens)],
         ],
     )
     print()
     print_table(
         ["latency_ms", "mean", "p50", "p95", "p99"],
         [
-            [
-                "ttft",
-                format_float(result.ttft_ms.mean_ms),
-                format_float(result.ttft_ms.p50_ms),
-                format_float(result.ttft_ms.p95_ms),
-                format_float(result.ttft_ms.p99_ms),
-            ],
-            [
-                "tpot",
-                format_float(result.tpot_ms.mean_ms),
-                format_float(result.tpot_ms.p50_ms),
-                format_float(result.tpot_ms.p95_ms),
-                format_float(result.tpot_ms.p99_ms),
-            ],
-            [
-                "e2e",
-                format_float(result.e2e_ms.mean_ms),
-                format_float(result.e2e_ms.p50_ms),
-                format_float(result.e2e_ms.p95_ms),
-                format_float(result.e2e_ms.p99_ms),
-            ],
+            ["ttft", *(format_float(value) for value in metrics["ttft"])],
+            ["tpot", *(format_float(value) for value in metrics["tpot"])],
+            ["e2e", *(format_float(value) for value in metrics["e2e"])],
         ],
     )
 
 
 def main() -> None:
-    """Run the benchmark CLI."""
-    args = parse_arguments()
-    prompts = load_prompts(args)
-
-    import torch
-
+    args = parse_args()
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     dtype_name = args.dtype or ("bfloat16" if device == "cuda" else "float32")
-    result = run_benchmark(
-        model_name=args.model,
-        prompts=prompts,
-        num_requests=args.num_requests,
-        warmup_requests=args.warmup_requests,
-        max_batch_size=args.max_batch_size,
-        max_new_tokens=args.max_new_tokens,
-        device=device,
-        dtype=resolve_dtype(dtype_name),
-        dtype_name=dtype_name,
+    dtype = DTYPE_BY_NAME[dtype_name]
+    tokenizer = AutoTokenizer.from_pretrained(args.model)
+    workload_name, prompt_tokens, output_tokens = WORKLOAD
+    run_case(
+        args,
+        tokenizer,
+        device,
+        dtype_name,
+        dtype,
+        workload_name,
+        prompt_tokens,
+        output_tokens,
     )
-    print_result(result)
 
 
 if __name__ == "__main__":
