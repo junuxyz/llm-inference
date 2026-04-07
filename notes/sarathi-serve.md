@@ -271,26 +271,33 @@ This is the scheduling algorithm introduced in Sarathi-Serve:
 
 If we break down the algorithm, stall-free batching works as follows:
 
-1. Initialize a token budget.
+**1. Initialize a token budget.**
 
 _Token budget_ is the fundamental knob used in Sarathi-Serve which determines how many tokens to allow for the step. This is static throughout the serving. We will talk more about considerations and tradeoffs due to the amount of token budget we set.
 
-2. Also initialize batch number of tokens
+**2. Also initialize batch number of tokens.**
 
 This is used to check whether the current batch exceeded the token budget.
 
-3. for each step:
-	a. prefer decode requests first
-	b. update batch number of token / remaining token budget
-	c. see if there's prefill that has been chunked and remaining
-		if True:
-			1. chunk size is min(remaining budget, remaining prefill length)
-			2. if remaining budget is 0: end this step
-			if not go to step 5
-	d. update batch number of token / remaining token budget
-	e. get next request and repeat the same behavior as 3~4
+**3. For each step:**
 
-4. process hybrid batching of all the requests chosen from 3.
+- **3.1.** Prefer decode requests first.
+
+- **3.2.** Update the batch number of tokens and the remaining token budget.
+
+- **3.3.** Check whether there is a partially processed prefill request with tokens remaining.
+
+  If yes:
+
+  - Set the chunk size to `min(remaining budget, remaining prefill length)`.
+  - If the remaining budget is `0`, end this step.
+  - Otherwise, continue to the next sub-step.
+
+- **3.4.** Update the batch number of tokens and the remaining token budget again.
+
+- **3.5.** Get the next request and repeat the same logic until the token budget for this step is exhausted.
+
+**4. Process hybrid batching of all the requests selected in step 3.**
 
 To consolidate the understanding, I will walk through an illustrated example that hopefully makes the scheduling process more intuitive. 
 
