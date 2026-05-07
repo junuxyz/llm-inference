@@ -11,3 +11,5 @@
 /assets/research/*/results/
 *.nsys-rep
 *.ncu-rep
+
+.obsidian/
