@@ -1,10 +1,10 @@
 # How Multiprocess Serving Works in vLLM
 
-In this post, we will walk through how multiprocess serving works in the current V1 serving path of vLLM - specifically how online serving starts, how each process connects, and how requests move through the runtime.
+This post traces the current V1 multiprocess serving path in vLLM: how online serving starts, how each process connects, and how requests move through the runtime.
 
 >This article is aligned with commit `a4905133f375ec721be441e7ec4a3f923daa28f3` (2026-04-22). Since vLLM moves fast, I will update this (or write a new post) when architecture changes.
 
-We are going to focus on OpenAI-compatible online serving which uses the `vllm serve` command.
+The focus is OpenAI-compatible online serving through `vllm serve`.
 
 # Why Multi Process?
 
@@ -18,19 +18,19 @@ We are going to focus on OpenAI-compatible online serving which uses the `vllm s
   <sub>Figure: online serving with 1 API server process, 1 Engine process, and 4 Worker processes.<sup><a href="#reference-1">[1]</a></sup></sub>
 </p>
 
-As mentioned in vLLM's design documents, at a high level, there are three types of processes:
+vLLM's design documents describe three process types:
 
 1. API Server process
 2. Engine Process
 3. Worker Process
 
-This is due to the different kinds of work, timing, and state each process manages. The API server handles request-facing CPU work, the engine process owns scheduling, and worker processes own rank-local GPU execution state. I will explain how each process works in the serving path in Part 2.
+The split follows the work each process owns. The API server handles request-facing CPU work, the engine process owns scheduling, and worker processes own rank-local GPU execution state. Part 2 follows each process in the serving path.
 
 ### CPU Resources
 
-The minimum CPU requirement can be written as: 
+The minimum CPU requirement can be written as:
 $$\text{minimum CPU Cores} = 1 + 1 + N\text{(number of GPU workers)}$$
-so we need at least $2 + N$ (physical) CPU cores in order to avoid performance disadvantages. In practice, allocating more cores is better for performance since other system processes need CPU time.<sup><a href="#reference-2">[2]</a></sup>
+so we need at least $2 + N$ physical CPU cores to avoid performance loss. In practice, leave extra CPU headroom because the OS and other services also need CPU time.<sup><a href="#reference-2">[2]</a></sup>
 
 If we scale to multiple API servers with DP and the DP coordinator enabled, it can be written as:
 $$\text{CPU Cores} = A + DP + N + 1$$
@@ -39,21 +39,21 @@ The $1$ at the end of the equation is for the DP coordinator process, which mana
 
 For example, 4 API Servers with `DP=4` and `TP=2`, `PP=2` would need $4 + 4 + 16 + 1 = 25$ CPU cores.
 
-Now that we've discussed the motivation for multiprocess and resources required for it, we will dive deeper into how the engine is initialized and runs.
+With the process roles and CPU cost in place, the next step is engine startup.
 
-We will first go through the common single-server, async, multiprocess, no-DP scenario in Part 1 and Part 2. ~~After that, we will extend the picture to multi-API server and DP~~ (WIP).
+Part 1 and Part 2 use the common single-server, async, multiprocess, no-DP scenario. ~~A later version will extend this to multi-API server and DP~~ (WIP).
 
 # Part 1. How Process Startup Works
 
-> Note: Tried my best explaining but this part can feel kind of dry.
+> Note: this startup path has a lot of plumbing, but it matters for understanding where each process comes from.
 
-At a high level, when we type in `vllm serve`, four things happen:
+When we run `vllm serve`, four things happen:
 1. the API side prepares backend launch
 2. the engine process launches and handshakes back
 3. the engine initializes worker processes
 4. the system starts serving
 
-The diagram below shows the overall startup process:
+The diagram below shows the startup process:
 <p align="center">
   <img
     src="../assets/notes/how-mp-serving-works-in-vllm/how-mp-serving-works-in-vllm-01-startup-flow.svg"
@@ -62,7 +62,7 @@ The diagram below shows the overall startup process:
   />
 </p>
 
-For the rest of this section, we will follow the outline above in more detail.
+The next sections follow those steps in order.
 
 ## 1. API server process starts and prepares backend launch
 
@@ -73,7 +73,7 @@ API server process starts
   -> builds engine client (`AsyncMPClient` with no DP)
 ```
 
-For online serving (`vllm serve`), the common entrypoint is `build_async_engine_client(...)` in `api_server.py` which starts the API server (frontend) process.
+For online serving (`vllm serve`), the common entrypoint is `build_async_engine_client(...)` in `api_server.py`. This starts the API server, or frontend, process.
 
 Before any child process exists, two things happen:
 1. the API server chooses how child processes will be created by `VLLM_WORKER_MULTIPROC_METHOD`
@@ -89,9 +89,9 @@ method to use. Python supports three relevant methods:
 
 - **`fork`** copies the parent process memory into the child. This method is fast, but unsafe once the parent has initialized accelerator runtime state such as CUDA or XPU, entered a Ray actor, enabled NUMA subprocess handling, or reached other states where forking is unreliable.
 - **`spawn`** starts a fresh Python interpreter. It is slower than `fork`, but is the safer option when the parent process may already contain accelerator or other non-fork-safe state.
-- **`forkserver`**: vLLM has a narrow OpenAI API server startup branch for forkserver preload. However, it is not the normal supported worker start method in current V1. The worker multiprocessing context accepts `fork` and `spawn`.
+- **`forkserver`**: vLLM has a narrow OpenAI API server startup branch for forkserver preload, but it is not the normal supported worker start method in current V1. The worker multiprocessing context accepts `fork` and `spawn`.
 
-Practically speaking, if a user launches vLLM with `vllm serve`, the CLI normally sets `spawn`, and library usage usually starts with the `fork` method. 
+For `vllm serve`, the CLI normally sets `spawn`. Library usage usually starts with the `fork` method.
 
 ### Building `AsyncLLM` and the engine client
 
@@ -110,7 +110,7 @@ try:
 
 `AsyncLLM` is the object the API server calls after HTTP-side preprocessing is done. It owns the input/output processors and the `EngineCoreClient`, so it is the API process's handle to the backend serving runtime.
 
-Inside `AsyncLLM`, the API side asks for a multiprocess engine client. In the baseline no-DP case, that factory returns `AsyncMPClient`, which refers to the asynchronous multiprocess client.
+Inside `AsyncLLM`, the API side asks for a multiprocess engine client. In the baseline no-DP case, that factory returns `AsyncMPClient`, the asynchronous multiprocess client.
 
 > [!NOTE] **AsyncLLM vs AsyncMPClient**
 > **AsyncLLM** is the public async engine layer which accepts requests, manages streaming outputs, aborts, errors, stats, and the API-facing lifecycle.
@@ -136,12 +136,12 @@ API server process
       -> waits for startup and input-socket readiness
 ```
 
-After `AsyncLLM` creates `AsyncMPClient` in the previous step, the client does three things:
+After `AsyncLLM` creates `AsyncMPClient`, the client does three things:
 1. choose client <-> engine ZMQ addresses
 2. launch the managed `EngineCore` process set
 3. wait for the startup handshake to finish
 
-Let's look more closely at the address setup and the handshake.
+The address setup and startup handshake are the two pieces to watch.
 
 ### Choosing ZMQ addresses
 
@@ -150,7 +150,7 @@ Let's look more closely at the address setup and the handshake.
 
 `AsyncMPClient` inherits most of its startup behavior from `MPClient` (base client for both async and sync clients).
 
-The EngineCoreClient owns the startup of the actual EngineCore process. During MPClient initialization, it spawns `EngineCoreProc.run_engine_core` using the pre-configured multiprocessing context (`fork` vs `spawn`) in the previous step.
+The EngineCoreClient owns the startup of the actual EngineCore process. During MPClient initialization, it spawns `EngineCoreProc.run_engine_core` using the multiprocessing context chosen earlier (`fork` or `spawn`).
 
 There are two types of addresses: IPC and TCP. If the engine is local, the addresses are usually IPC paths, meaning both processes talk through a Unix-domain socket on the same node. If the route crosses nodes, vLLM uses TCP addresses instead.
 
@@ -200,15 +200,15 @@ if executor_fail_callback is not None:
 	self.model_executor.register_failure_callback(executor_fail_callback)
 ```
 
-The EngineCore remains the single place that manages scheduling. It decides which requests are accepted, batched together, aborted, or advanced to the next step.
+EngineCore remains the single scheduling point. It decides which requests are accepted, batched together, aborted, or advanced to the next step.
 
-After scheduling, execution is spread out to local workers. In most GPU setups, this is one worker process per local GPU.
+After scheduling, execution fans out to local workers. In most GPU setups, there is one worker process per local GPU.
 
 > Note: A _local rank_ is the worker's index on a node. For example, on a node with 4 local GPUs, the workers have `local_rank` 0, 1, 2, and 3.
 
 ### Worker Process Startup
 
-A worker process has its own startup sequence before it can run model work. This includes setting up local runtime/device state and loading the model.
+A worker process has its own startup sequence before it can run model work: setting up local runtime/device state and loading the model.
 
 `MultiprocExecutor` starts each worker with two one-way pipes.
 The **ready pipe** lets the child tell the parent that startup finished. The parent waits on this pipe before treating the worker as usable. The **death pipe** goes the other direction. The parent keeps one end open, and the child watches the other end so it can detect when the parent process disappears.
@@ -232,21 +232,21 @@ proc = context.Process(
 
 # Part 2. How Serving Works
 
-Before following the request path, let's connect the three process roles to the steady-state serving loop.
+Before following the request path, here is how the three process roles map to the steady-state serving loop.
 
 ### API Server Process
 
-The API Server Process is the user-facing endpoint which deals with CPU work such as HTTP handling, tokenization, preprocessing, and streaming.
+The API Server Process is the user-facing endpoint. It handles CPU work such as HTTP handling, tokenization, preprocessing, and streaming.
 
-As model execution times drop due to the great performance of modern GPUs and kernel work, CPU work such as running the API server, scheduling, and preparing inputs, etc. becomes the bottleneck if not processed efficiently.
+As GPU execution gets faster, CPU work can become the bottleneck: API handling, scheduling, input preparation, and output processing.
 
-For multimodal preprocessing, the workload for the API server increases because a lot more data such as image or audio needs to be preprocessed. For example, a single input image of 1024x3072 pixels is around ~9 MB when represented as an int8 array.<sup><a href="#reference-1">[1]</a></sup>
+Multimodal inputs make this worse because image and audio payloads need preprocessing before they reach the engine. For example, a single 1024x3072 image is around ~9 MB when represented as an int8 array.<sup><a href="#reference-1">[1]</a></sup>
 
-By dividing the API server process from the engine process, all the requests are pushed to a non-blocking process (works asynchronously), avoiding expensive CPU-side preprocessing leaving the GPU idle.
+Splitting the API server from the engine lets CPU-side request handling overlap with engine scheduling and GPU execution. Expensive preprocessing is less likely to leave the GPU idle.
 
-vLLM additionally uses Shared Memory IPC Caching for multimodal data, which reduces redundant copies of sending large amounts of data through IPC (Inter-Process Communication).
+vLLM also uses Shared Memory IPC Caching for multimodal data, reducing redundant copies when large payloads cross the IPC boundary.
 
-The default number of API Server processes is one. However, if the workloads in the API server become the bottleneck relative to scheduling or model execution, we can consider adding more API server processes by adding `--api-server-count <number>` in the `vllm serve` command.
+The default number of API Server processes is one. If API-side work becomes the bottleneck relative to scheduling or model execution, `vllm serve --api-server-count <number>` adds more API server processes.
 
 ### Frontend -> EngineCore
 
@@ -256,13 +256,13 @@ The frontend boundary uses ZMQ because it carries heterogeneous control messages
 
 ### Engine Process
 
-The engine process, on the other hand, exists to schedule the incoming requests sent from the API server - admission, batching, aborts, and output routing, etc.
+The engine process schedules incoming requests from the API server: admission, batching, aborts, output routing, and related state transitions.
 
-Since we don't want to synchronously wait for the preprocessing and request handling and then schedule them, it is natural to set a separate Engine Process. V1 isolates an `EngineCore` execution loop so those tasks can overlap instead of contending in one process.<sup><a href="#reference-5">[5]</a></sup>
+V1 isolates the `EngineCore` execution loop so request handling, preprocessing, scheduling, and model execution can overlap instead of contending inside one process.<sup><a href="#reference-5">[5]</a></sup>
 
-Batches of requests are scheduled and sent to the worker at the iteration level. For people who are interested in how continuous batching itself works, I recommend reading these two articles since I won't go into the details in this article: continuous batching article<sup><a href="#reference-6">[6]</a></sup>, inside vllm
+Batches of requests are scheduled and sent to workers at the iteration level. This post does not cover continuous batching itself; Anyscale's continuous batching article is a useful background reference.<sup><a href="#reference-6">[6]</a></sup>
 
-We can scale the number of Engine Core processes when we use DP (Data Parallelism). DP is a basic parallelism method which replicates the entire model weights across multiple GPU sets and processes independent batches of requests in parallel. Unless DP (Data Parallelism) is enabled, there is just one Engine Process.
+DP (Data Parallelism) can scale the number of EngineCore processes. DP replicates the full model weights across multiple GPU sets and processes independent request batches in parallel. Without DP, there is one Engine Process.
 
 ### Inside EngineCore
 
@@ -283,9 +283,9 @@ def run_busy_loop(self):
 
 ### Worker Process
 
-The worker process is the process that actually takes responsibility for managing the GPU to generate the next token from a given batch of requests.
+The worker process manages the GPU work needed to generate the next token for a scheduled batch.
 
-Worker Process manages model weights, KV cache pages, communicator state, CUDA graphs, and rank-local buffers.
+Worker Process owns model weights, KV cache pages, communicator state, CUDA graphs, and rank-local buffers.
 
 <p align="center">
   <img
@@ -297,9 +297,9 @@ Worker Process manages model weights, KV cache pages, communicator state, CUDA g
   <sub>Figure: Engine (Scheduler) broadcasts to $N$ Workers.<sup><a href="#reference-5">[5]</a></sup></sub>
 </p>
 
-Usually there is one Worker per GPU, and the number of Workers scales with the parallelism (TP and PP) configuration. For example, PP=2 with TP=4 would end up in 8 GPUs = 8 worker processes.
+Usually there is one Worker per GPU, and the number of Workers scales with the TP and PP configuration. For example, PP=2 with TP=4 needs 8 GPUs, so vLLM starts 8 worker processes.
 
-If the processes mentioned above collapse, it will lead to highly unpredictable runtime and lower throughput.
+Collapsing these roles into fewer processes would mix request handling, scheduling, and rank-local GPU state in one runtime. That makes latency less predictable and lowers throughput.
 
 ### EngineCore -> Workers
 
@@ -314,18 +314,18 @@ def execute_model(self, scheduler_output, non_block=False):
     )
 ```
 
-Workers run the scheduled requests against already-initialized local device and return results through the executor response path.
+Workers run the scheduled requests on already-initialized local devices and return results through the executor response path.
 
 ### Return Path
-The return path works in reverse order, where Worker replies are collected by the executor, converted by `EngineCore` into `EngineCoreOutputs`, sent back over the frontend ZMQ output path, and finally converted by `OutputProcessor` into streamed or final API responses.
+The return path runs in reverse. Worker replies are collected by the executor, converted by `EngineCore` into `EngineCoreOutputs`, sent back over the frontend ZMQ output path, and converted by `OutputProcessor` into streamed or final API responses.
 
 ### Why does EngineCoreClient <-> EngineCore use ZMQ unlike EngineCore <-> Worker using MQ and pipe?
 
-Unlike the EngineCoreClient <-> EngineCore boundary where it uses the ZMQ library, Engine <-> Worker uses shared-memory (`shm`) MQs (`MessageQueue`s) and pipes instead. However, ZMQ is known to perform worse than shared memory. Then why do we use ZMQ in the upper boundary?
+The EngineCoreClient <-> EngineCore boundary uses ZMQ, while the Engine <-> Worker boundary uses shared-memory (`shm`) MQs (`MessageQueue`s) and pipes. Since shared memory is usually faster than ZMQ, why does the upper boundary use ZMQ?
 
-This is because the frontend-to-engine control boundary needs `ROUTER`/`PULL` messaging (which ZMQ supports) that works across local IPC, multiple API workers, and distributed DP layouts.
+The frontend-to-engine control boundary needs `ROUTER`/`PULL` messaging, which ZMQ supports, across local IPC, multiple API workers, and distributed DP layouts.
 
-Also, the data the frontend (API server) sends -- request metadata, token ids, control commands -- and receives back as output metadata is relatively small, so ZMQ is a good fit to use.
+The frontend sends relatively small payloads: request metadata, token IDs, control commands, and output metadata. ZMQ fits that boundary well.
 
 <p align="center">
   <img
@@ -337,7 +337,7 @@ Also, the data the frontend (API server) sends -- request metadata, token ids, c
   <sub>Figure: Multiple API servers with multiple Engine Cores</sub>
 </p>
 
-However the engine-to-worker path usually is one `EngineCore` controlling many local workers, so it often needs broadcast-style communication. It also sends heavier execution data, such as scheduler outputs, block tables, and tensor-related payloads. So for that path, vLLM uses the executor's multiprocessing communication layer instead of ZMQ, largely for better performance (according to a PR in vLLM, shared-memory broadcast was more efficient than ZMQ on the engine-to-worker path in single-node IPC).<sup><a href="#reference-7">[7]</a></sup>
+The engine-to-worker path is different. One `EngineCore` usually controls many local workers, so it needs broadcast-style communication. It also sends heavier execution data, such as scheduler outputs, block tables, and tensor-related payloads. For that path, vLLM uses the executor's multiprocessing communication layer instead of ZMQ. A vLLM PR notes that shared-memory broadcast was more efficient than ZMQ on the single-node engine-to-worker IPC path.<sup><a href="#reference-7">[7]</a></sup>
 
 
 ## References
