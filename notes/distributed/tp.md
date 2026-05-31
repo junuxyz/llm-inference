@@ -57,8 +57,8 @@ These partial results have the same shape as output so they must be summed:
 This communication pattern is called all-reduce.<sup><a href="#reference-4">[4]</a></sup>
 
 
-> ![note] Note
-> For now, think of All-Reduce as summing each GPU's local results and copying it to each of them and All-Gather as concatenating local results and adding it to each of the GPUs. I am planning to write on how these communications happen internally (in NCCL) in another note.
+> [!note] Communication intuition
+> For now, think of All-Reduce as summing each GPU's local result and copying the sum back to every GPU. All-Gather is closer to concatenating each GPU's local slice and making the concatenated result available to every GPU. I will cover how these collectives are implemented internally, for example in NCCL, in a separate note.
 
 ### Column Parallel and Row Parallel in Transformer Block
 
@@ -77,11 +77,11 @@ Since Multi-Head Attention computes attention per head independently, we can do 
 After the attention operation, we use row-parallelism on the output projection `W_O`, whose input dimension is the concatenated attention-head dimension. Since that input is already partitioned by heads, each rank computes only a partial contribution to the final hidden state. The ranks then use All-Reduce to sum these partial outputs and recover the complete hidden state.
 
 **FFN Layer**
-Many modern MLP works with gated projection, up projection, and down projection, where we gate project the input and imply activation function. We also up project the input. Then we multiply both and then down project it.
+Many modern dense MLP blocks use `gate_proj`, `up_proj`, and `down_proj`. The input is projected into two intermediate tensors: one goes through the gate projection and activation, and the other goes through the up projection. These two tensors are multiplied element-wise, then `down_proj` maps the result back to the hidden size.
 
 The `gate_proj` and `up_proj` are usually column-parallel. This is because the FFN usually expands the hidden state into a larger intermediate dimension.<sup>*</sup> For example Qwen3 8B's hidden size is 4,096 while its FFN intermediate size is 12,288 (3x).
 
-Then gate projected and activated and the up projected are multiplied rank-locally. `down_proj` is row-parallel because it reduces the FFN intermediate activation back to the original hidden size. Each rank produces a partial contribution, and All-Reduce combines those partial outputs into the complete hidden state.
+The activated gate projection and the up projection are multiplied rank-locally. `down_proj` is row-parallel because it reduces the FFN intermediate activation back to the original hidden size. Each rank produces a partial contribution, and All-Reduce combines those partial outputs into the complete hidden state.
 
 <sup>*</sup> This is not always true. For MoE architecture, the intermediate size of each expert's FFN may be smaller. But for dense models, this is usually the case.
 
@@ -107,8 +107,8 @@ While Transformer blocks take up most of the weights, TP isn't only used in Tran
 
 Instead of every rank storing the full token embedding table `[vocab_size, hidden_size]`, each rank stores only a contiguous slice of the vocabulary. For example, with two TP ranks and `vocab_size = 1000`, rank0 may store token ids `0-499` and rank1 may store token ids `500-999`.
 
-> ![note] Note
-> Row-wise shard is not the same as Row Parallelism. Row Parallelism and Column Parallelism are specific techniques used when sharding matrix multiplication (projection), while embedding and LM head work as lookup tables for a given input.
+> [!note] Vocab sharding vs row parallelism
+> A row-wise vocabulary shard is not the same thing as Row Parallelism. Row Parallelism and Column Parallelism describe how we shard matrix multiplication in projection layers. Vocab-parallel embedding and LM head instead shard the vocabulary axis of a lookup/output table.
 
 When a token belongs to a rank’s vocabulary range, that rank looks up the embedding. Other ranks produce zeros for that token. Then the ranks communicate All-reduce to recover the correct embedding output. This process is often called vocab parallel embedding.
 
@@ -202,7 +202,7 @@ For example, if `total_num_kv_heads = 2` and `tp_size = 4`, the KV heads cannot 
 
 Note that in the replication case, KV heads are duplicated across ranks, so TP gives less memory saving for the KV projection weights and KV cache in this part. This will be addressed again later.
 
-So each rank gets partial hidden dimension of Q heads and partial or duplicate KV heads.
+So each rank gets a subset of Q heads and either a subset or a duplicate copy of KV heads.
 
 No all-gather is needed here because the next row-parallel projection consumes the sharded attention output directly.
 
@@ -246,26 +246,18 @@ class Qwen2MLP(nn.Module):
         return x
 ```
 
-Again we can see a similar pattern in the FFN layer (Qwen3MLP inherits Qwen2MLP directly) where up and gate projection uses column parallel and down projection uses row parallel.
+Again we can see a similar pattern in the FFN layer (Qwen3MLP inherits Qwen2MLP directly) where up and gate projection use column parallelism and down projection uses row parallelism.
 
-> [!note] MergedColumnParallel vs QKVParallelLinear
-> Why use `QKVParallelLinear` for QKV projection, but
-> `MergedColumnParallelLinear` for the MLP layer?
+Source: [`MergedColumnParallelLinear`](https://github.com/vllm-project/vllm/blob/8c94938cfb92cc00b244ae4a933c5f60dbc1139f/vllm/model_executor/layers/linear.py#L607-L729)
+
+> [!note] MergedColumnParallelLinear vs QKVParallelLinear
+> Both layers are column-parallel, but they solve different loading and sharding problems.
 >
-> `MergedColumnParallelLinear` is a generic fused column-parallel linear layer.
-> It concatenates multiple projection weights along the output dimension and
-> shards each projection independently when loading weights. This works well for
-> MLP projections such as `gate_proj` and `up_proj`, because they have the same
-> intermediate size and can be sharded by output features (hidden dimension).
+> `MergedColumnParallelLinear` is the generic fused version. It packs multiple projections along the output dimension, then shards each packed projection separately while loading weights. This fits the MLP case well because `gate_proj` and `up_proj` have the same input shape and the same intermediate output size.
 >
-> QKV projection also concatenates multiple projections, but attention has extra
-> structure - Q, K, and V are organized by heads, Q and KV may have different
-> numbers of heads in GQA/MQA/MLA-style models, and KV heads may need to be
-> replicated when the tensor-parallel size is larger than the number of KV heads.
-> 
-> Thus vLLM uses the specialized `QKVParallelLinear`, which reuses the
-> column-parallel forward path but implements attention-specific sharding and
-> weight-loading logic.
+> `QKVParallelLinear` also packs several projections, but attention has extra structure. Q, K, and V are grouped by heads; Q heads and KV heads may have different counts in GQA/MQA-style models; and when `tp_size` is larger than the number of KV heads, vLLM must replicate KV heads instead of splitting a single head.
+>
+> So `QKVParallelLinear` reuses the column-parallel forward path, but adds attention-specific head sharding and weight-loading logic. `MergedColumnParallelLinear` is enough for the MLP because its two projections are just same-shaped output shards, without head-level rules.
 
 **ParallelLMHead**
 
