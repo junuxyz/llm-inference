@@ -57,7 +57,7 @@ These partial results have the same shape as output so they must be summed:
 This communication pattern is called all-reduce.<sup><a href="#reference-4">[4]</a></sup>
 
 
-> [!note] Communication intuition
+> [!NOTE]
 > For now, think of All-Reduce as summing each GPU's local result and copying the sum back to every GPU. All-Gather is closer to concatenating each GPU's local slice and making the concatenated result available to every GPU. I will cover how these collectives are implemented internally, for example in NCCL, in a separate note.
 
 ### Column Parallel and Row Parallel in Transformer Block
@@ -107,7 +107,7 @@ While Transformer blocks take up most of the weights, TP isn't only used in Tran
 
 Instead of every rank storing the full token embedding table `[vocab_size, hidden_size]`, each rank stores only a contiguous slice of the vocabulary. For example, with two TP ranks and `vocab_size = 1000`, rank0 may store token ids `0-499` and rank1 may store token ids `500-999`.
 
-> [!note] Vocab sharding vs row parallelism
+> [!NOTE]
 > A row-wise vocabulary shard is not the same thing as Row Parallelism. Row Parallelism and Column Parallelism describe how we shard matrix multiplication in projection layers. Vocab-parallel embedding and LM head instead shard the vocabulary axis of a lookup/output table.
 
 When a token belongs to a rank’s vocabulary range, that rank looks up the embedding. Other ranks produce zeros for that token. Then the ranks communicate All-reduce to recover the correct embedding output. This process is often called vocab parallel embedding.
@@ -250,8 +250,8 @@ Again we can see a similar pattern in the FFN layer (Qwen3MLP inherits Qwen2MLP 
 
 Source: [`MergedColumnParallelLinear`](https://github.com/vllm-project/vllm/blob/8c94938cfb92cc00b244ae4a933c5f60dbc1139f/vllm/model_executor/layers/linear.py#L607-L729)
 
-> [!note] MergedColumnParallelLinear vs QKVParallelLinear
-> Both layers are column-parallel, but they solve different loading and sharding problems.
+> [!NOTE]
+> `MergedColumnParallelLinear` and `QKVParallelLinear` are both column-parallel, but they solve different loading and sharding problems.
 >
 > `MergedColumnParallelLinear` is the generic fused version. It packs multiple projections along the output dimension, then shards each packed projection separately while loading weights. This fits the MLP case well because `gate_proj` and `up_proj` have the same input shape and the same intermediate output size.
 >
